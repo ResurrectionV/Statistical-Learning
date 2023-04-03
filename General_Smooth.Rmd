@@ -1,0 +1,635 @@
+---
+title: "General Smooth"
+date: "Thursday, 11/10"
+author: "[Chenjia Li]"
+output: html_notebook
+---
+
+
+```{r}
+#Source the packages
+source("smoother.pck")
+```
+
+
+```{r}
+#Get the NOAAnew.csv
+Nnew <- read.csv("NOAAnew.csv")
+head(Nnew)
+```
+
+
+```{r}
+#Myhatw function, Get the hat matrix
+my.hat.w<-function(x,wt){
+	x1<-cbind(1,x)
+	x1%*%solve(t(x1)%*%diag(wt)%*%x1)%*%t(x1)%*%(diag(wt))
+}
+```
+
+## 1.Create a function that takes the output of each smoother in smoother.pck and calculates its press statistic.
+
+#### a) Press function
+```{r}
+# Input parameter: 1) s_lambda matrix 2) Data X 3) Observation data Y
+# General Description: 1. order the X and Y, 2.calculate the press value based on the Y and the smatrix based on the formula given in the class slides.
+smooth.press <- function(smat,X,Y){
+  ord <- order(X)
+  press.total <- 0
+  Y.ord <- Y[ord]
+  ymat <- as.matrix(Y.ord)
+  cmat <- smat %*% ymat
+  s.diag <- diag(smat)
+  for (i in 1:length(Y)){
+    press.total <- press.total + ((Y.ord[i] - cmat[i])/(1 - s.diag[i]))^2
+  }
+  press.total
+}
+```
+
+
+#### b) each smoother and their press value
+```{r}
+# General description: Input all the argument to each of the smoother function, and then the list.out contains the smoother function output, and the corresponding press values.
+#bin mean
+bm.out <- function(x,y,p1){
+  out <- bin.mean(x,y,p1)
+  press.out <- smooth.press(out$smat,x,y)
+  list.out <- list(sbm.smoother.out = out,press.bm.value = press.out)
+  list.out
+}
+
+#Gauss mean
+gm.out <- function(x,y,p1){
+  out <- gauss.mean(x,y,p1)
+  press.out <- smooth.press(out$smat,x,y)
+  list.out <- list(sbm.smoother.out = out,press.gm.value = press.out)
+  list.out
+}
+
+#Gauss reg
+gr.out <- function(x,y,p1){
+  out <- gauss.reg(x,y,p1)
+  press.out <- smooth.press(out$smat,x,y)
+  list.out <- list(sgr.smoother.out = out,press.gr.value = press.out)
+  list.out
+}
+
+#Gauss mean trunc
+gmt.out <- function(x,y,p1,p2){
+  out <- gauss.mean.trunc(x,y,p1,p2)
+  press.out <- smooth.press(out$smat,x,y)
+  list.out <- list(sgmt.smoother.out = out,press.gmt.value = press.out)
+  list.out
+}
+
+#Gauss reg trunc
+grt.out <- function(x,y,p1,p2){
+  out <- gauss.reg.trunc(x,y,p1,p2)
+  press.out <- smooth.press(out$smat,x,y)
+  list.out <- list(sgrt.smoother.out = out,press.grt.value = press.out)
+  list.out
+}
+```
+
+
+## 2.Apply each to the NOAA using the parameters given
+```{r}
+#bin mean
+plot(Nnew[,3],Nnew[,2],xlab="temperature rise",ylab="rate of billion dollar weather disasters")
+bm <- bm.out(Nnew[,3],Nnew[,2],12)
+bm$press.bm.value
+```
+<br>
+<br>
+
+```{r}
+#gauss mean
+plot(Nnew[,3],Nnew[,2],xlab="temperature rise",ylab="rate of billion dollar weather disasters")
+gm <- gm.out(Nnew[,3],Nnew[,2],0.063)
+gm$press.gm.value
+```
+<br>
+<br>
+
+```{r}
+#bin mean
+plot(Nnew[,3],Nnew[,2],xlab="temperature rise",ylab="rate of billion dollar weather disasters")
+gr <- gr.out(Nnew[,3],Nnew[,2],.078)
+gr$press.gr.value
+```
+<br>
+<br>
+
+```{r}
+#bin mean
+plot(Nnew[,3],Nnew[,2],xlab="temperature rise",ylab="rate of billion dollar weather disasters")
+gmt <- gmt.out(Nnew[,3],Nnew[,2],.063,20)
+gmt$press.gmt.value
+```
+<br>
+<br>
+
+```{r}
+#bin mean
+plot(Nnew[,3],Nnew[,2],xlab="temperature rise",ylab="rate of billion dollar weather disasters")
+grt <- grt.out(Nnew[,3],Nnew[,2],.08,17)
+grt$press.grt.value
+#grt$sgrt.smoother.out$smat
+```
+
+
+
+<br>
+<br>
+
+# 3. Now create a function that uses a greedy random search to find better values of the adjustable parameters, based on minimizing PRESS
+
+```{r}
+### Input Parameter:
+# func.name is the function name listed in smoother.pck.
+# The criterion is supposed to be no improvement in press statistic.
+# The increment incre1 and incre2 is supposed to be small, at most 0.01.
+# The x and y are the data set
+# init1 and init2 are the two parameters initial values for the Greedy Random Search
+Greedy.rs <- function(func.name = NULL, incre1 = NULL, incre2 = NULL, x, y, init1 = NULL, init2 = NULL){
+	plot(x,y,xlab="temperature rise",ylab="rate of billion dollar weather disasters")
+  # prev.s is the smatrix we got that has the least press statistic we have until now
+  # prev.press is the least press statistic we have until now
+  # prev.p1 is the first parameter we got that has the least press statistic we have until now
+  # prev.p2 is the second parameter we got that has least press statistic we have until now
+  
+  # cur.s is the smatrix we have in current iteration
+  # cur.press is the least press statistic we have until now
+  # cur.p1 is the first parameter in current iteration
+  # cur.p2 is the second parameter in current iteration
+  #383.4362, 325.0958, 310.7954, 325.2185, 308.5106
+  
+  
+  # The if~else statement initialize the smoother function output and their press values based on the function names and the parameters.
+  if ( func.name ==  "bin.mean" ){
+    
+		prev.s <- bin.mean(x,y,init1)
+    prev.press <- smooth.press(prev.s$smat,x, y)
+    prev.p1 <- init1
+    prev.p2 <- init2
+  
+    cur.s <- prev.s
+    cur.press <- prev.press
+    cur.p1 <- prev.p1
+		  
+	} else if ( func.name ==  "gauss.mean" ){
+	  
+		prev.s <- gauss.mean(x,y,init1)
+    prev.press <- smooth.press(prev.s$smat, x, y)
+    prev.p1 <- init1
+    prev.p2 <- init2
+  
+    cur.s <- prev.s
+    cur.press <- prev.press
+    cur.p1 <- prev.p1
+    
+	} else if ( func.name ==  "gauss.reg" ){
+	  
+		prev.s <- gauss.reg(x,y,init1)
+    prev.press <- smooth.press(prev.s$smat, x, y)
+    prev.p1 <- init1
+    prev.p2 <- init2
+  
+    cur.s <- prev.s
+    cur.press <- prev.press
+    cur.p1 <- prev.p1
+    
+	} else if ( func.name ==  "gauss.mean.trunc" ){
+	  
+		prev.s <- gauss.mean.trunc(x,y,init1,init2)
+    prev.press <- smooth.press(prev.s$smat, x, y)
+    prev.p1 <- init1
+    prev.p2 <- init2
+  
+    cur.s <- prev.s
+    cur.press <- prev.press
+    cur.p1 <- prev.p1
+    cur.p2 <- prev.p2
+    
+	} else if ( func.name ==  "gauss.reg.trunc" ){
+	
+	  prev.s <- gauss.reg.trunc(x,y,init1,init2)
+    prev.press <- smooth.press(prev.s$smat, x, y)
+    prev.p1 <- init1
+    prev.p2 <- init2
+  
+    cur.s <- prev.s
+    cur.press <- prev.press
+    cur.p1 <- prev.p1
+    cur.p2 <- prev.p2
+    
+	}
+   
+  
+  check1 <- 0
+  check2 <- 0
+  
+  # Since we have the criterion to stop our program, we should have check1 and check2 to check
+  # check1: counts the consecutive number that |press of (n-1)th iteration minus press of nth iteration| is smaller than 0.01
+  # check2: counts the number of consecutive number that press of nth iteration minus press of (n-1)th iteration is a positive value
+  # check1 > 400 or check2 > 800 -> stops the program
+  
+  
+  
+  #General ideas to write code for Greedy Random Search
+  # For one parameter smoother function
+  ## 1. in the while loop, calculate the press value at each step of current parameter + increment
+  ## 2. The loop will end whenever either check1 > 400 or check2 > 800
+  ## 3. At each step, we have step (n-1)th and nth press value, we will compare them. If absolute ((n-1)th - nth) < 0.001, check1 = check1 + 1. If absolute (nth - (n-1)th) >= 0, check2 = check2 + 1. Since we want to know if the press value is converging or monotonically increasing.
+  # For one parameter smoother function
+  ## Same idea as one parameter, we will have double while loop in the program. The inner loop will check the each value in nnn based on fixed value of lambda. We will have lowest press value and its parameters after each inner loop.
+  ## Then we can treat the outer loop same as one parameter.
+  
+  #bin.mean
+  if (func.name == "bin.mean"){
+    while( check1 < 1 & check2 < 2 ){
+      temp.press <- cur.press
+      cur.p1 <- cur.p1 + incre1
+      cur.s <- bin.mean(x,y,cur.p1)
+      cur.press <- smooth.press(cur.s$smat, x, y)
+      
+      if( is.na(cur.press) ){
+        cur.press <- temp.press
+        next
+      } 
+      
+      if ( abs(temp.press - cur.press) < 0.01 ){
+        check1 <- check1 + 1
+      } else {
+        check1 <- 0
+      }
+      
+      if ( cur.press - temp.press >= 0 ){
+        check2 <- check2 + 1
+      } else {
+        check2 <- 0
+      }
+      
+      if (cur.press < prev.press){
+        prev.p1 <- cur.p1
+        prev.press <- cur.press
+      }
+      
+    }
+  }
+  
+  
+    
+    
+    
+  #gauss.mean
+  if (func.name == "gauss.mean"){
+      while ( check1 < 400 & check2 < 800){
+        temp.press <- cur.press
+        cur.p1 <- cur.p1 + incre1
+        cur.s <- gauss.mean(x,y,cur.p1)
+        cur.press <- smooth.press(cur.s$smat, x, y)
+        
+        if( is.na(cur.press) ){
+          cur.press <- temp.press
+          next
+        } 
+      
+        if ( abs(temp.press - cur.press) < 0.01 ){
+          check1 <- check1 + 1
+        } else {
+          check1 <- 0
+        }
+      
+        if ( cur.press - temp.press >= 0 ){
+          check2 <- check2 + 1
+        } else {
+          check2 <- 0
+        }
+        
+        if (cur.press < prev.press){
+          prev.p1 <- cur.p1
+          prev.press <- cur.press
+        }
+      }
+  }
+  
+  
+  #gauss.reg
+  if (func.name == "gauss.reg"){
+      while ( check1 < 400 & check2 < 800){
+        temp.press <- cur.press
+        cur.p1 <- cur.p1 + incre1
+        cur.s <- gauss.reg(x,y,cur.p1,do.plot=T)
+        cur.press <- smooth.press(cur.s$smat, x, y)
+        
+        if( is.na(cur.press) ){
+          cur.press <- temp.press
+          next
+        } 
+      
+        if ( abs(temp.press - cur.press) < 0.01 ){
+          check1 <- check1 + 1
+        } else {
+          check1 <- 0
+        }
+      
+        if ( cur.press - temp.press >= 0 ){
+          check2 <- check2 + 1
+        } else {
+          check2 <- 0
+        }
+        
+        if (cur.press < prev.press){
+          prev.p1 <- cur.p1
+          prev.press <- cur.press
+        }
+      }
+  }
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  check3 <- 0
+  check4 <- 0
+  
+  #Gauss.mean.trunc
+  if (func.name == "gauss.mean.trunc"){
+    ind.press <- cur.press
+    while ( check1 < 400 & check2 < 800 ){
+      check3 <- 0
+      check4 <- 0
+      prev.inner.s <- cur.s
+      prev.inner.press <- cur.press
+      prev.inner.p1 <- cur.p1
+      prev.inner.p2 <- cur.p2
+      
+      cur.inner.press <- cur.press
+      cur.inner.p2 <- cur.p2
+      cur.inner.s <- cur.s
+      
+      while( check3 < 3 & check4 < 3 ){
+        
+        temp.inner.press <- cur.inner.press
+        
+        cur.inner.p2 <- cur.inner.p2 + incre2
+        cur.inner.s <- gauss.mean.trunc(x,y,prev.inner.p1,cur.inner.p2,do.plot=T)
+        cur.inner.press <- smooth.press(cur.inner.s$smat, x, y)
+        
+        
+        if( is.na(cur.inner.press) ){
+          cur.inner.press <- temp.inner.press
+          next
+        } 
+      
+        if ( abs(temp.inner.press - cur.inner.press) < 0.01 ){
+          check3 <- check3 + 1
+        } else {
+          check3 <- 0
+        }
+      
+        if ( cur.inner.press - temp.inner.press  >= 0 ){
+          check4 <- check4 + 1
+        } else {
+          check4 <- 0
+        }
+        
+        if (cur.inner.press < prev.inner.press){
+          prev.inner.p2 <- cur.inner.p2
+          prev.inner.press <- cur.inner.press
+        }
+        
+        #inner while end
+      }
+      
+      
+      
+      
+      
+      temp.press <- cur.press
+      
+      cur.press <- prev.inner.press
+      cur.p2 <- prev.inner.p2
+      
+      if ( abs(ind.press - cur.press) < 0.01 ){
+        check1 <- check1 + 1
+      } else {
+        check1 <- 0
+      }
+      
+      if ( cur.press - ind.press >= 0 ){
+        check2 <- check2 + 1
+      } else {
+        check2 <- 0
+      }
+      
+      ind.press <- cur.press
+      
+      if (cur.press < prev.press){
+          prev.p1 <- cur.p1
+          prev.p2 <- cur.p2
+          prev.press <- cur.press
+      }
+      
+      cur.p1 <- cur.p1 + incre1
+      cur.p2 <- 5
+      cur.s <- gauss.mean.trunc(x,y,cur.p1,cur.p2,do.plot=T)
+      cur.press <- smooth.press(cur.s$smat, x, y)
+      
+      
+      #outer while end
+    }
+  }
+  
+  
+  
+  
+  #Gauss.reg.trunc
+  if (func.name == "gauss.reg.trunc"){
+    ind.press <- cur.press
+    while ( check1 < 400 & check2 < 800 ){
+      check3 <- 0
+      check4 <- 0
+      prev.inner.s <- cur.s
+      prev.inner.press <- cur.press
+      prev.inner.p1 <- cur.p1
+      prev.inner.p2 <- cur.p2
+      
+      cur.inner.press <- cur.press
+      cur.inner.p2 <- cur.p2
+      cur.inner.s <- cur.s
+      
+      while( check3 < 2 & check4 < 2 ){
+        
+        temp.inner.press <- cur.inner.press
+        
+        cur.inner.p2 <- cur.inner.p2 + incre2
+        cur.inner.s <- gauss.reg.trunc(x,y,prev.inner.p1,cur.inner.p2,do.plot=T)
+        cur.inner.press <- smooth.press(cur.inner.s$smat, x, y)
+        
+        
+        if( is.na(cur.inner.press) ){
+          cur.inner.press <- temp.inner.press
+          next
+        } 
+      
+        if ( abs(temp.inner.press - cur.inner.press) < 0.01 ){
+          check3 <- check3 + 1
+        } else {
+          check3 <- 0
+        }
+      
+        if ( cur.inner.press - temp.inner.press  >= 0 ){
+          check4 <- check4 + 1
+        } else {
+          check4 <- 0
+        }
+        
+        if (cur.inner.press < prev.inner.press){
+          prev.inner.p2 <- cur.inner.p2
+          prev.inner.press <- cur.inner.press
+        }
+        
+        #inner while end
+      }
+      
+      
+      
+      
+      
+      temp.press <- cur.press
+      
+      cur.press <- prev.inner.press
+      cur.p2 <- prev.inner.p2
+      
+      if ( abs(ind.press - cur.press) < 0.01 ){
+        check1 <- check1 + 1
+      } else {
+        check1 <- 0
+      }
+      
+      if ( cur.press - ind.press >= 0 ){
+        check2 <- check2 + 1
+      } else {
+        check2 <- 0
+      }
+      
+      ind.press <- cur.press
+      
+      if (cur.press < prev.press){
+          prev.p1 <- cur.p1
+          prev.p2 <- cur.p2
+          prev.press <- cur.press
+      }
+      
+      cur.p1 <- cur.p1 + incre1
+      cur.p2 <- 5
+      cur.s <- gauss.reg.trunc(x,y,cur.p1,cur.p2,do.plot=T)
+      cur.press <- smooth.press(cur.s$smat, x, y)
+      
+      
+      #outer while end
+    }
+  }
+  
+  
+  
+	list.out <- list(lambda1 = prev.p1, lambda2 = prev.p2)
+	list.out
+}
+```
+
+
+<br>
+<br>
+<br>
+<br>
+
+
+
+#### a) Find optimized parameter(s) for bin.mean
+```{r}
+out1 <- Greedy.rs(func.name = "bin.mean", incre1 = 1, incre2 = NULL, x = Nnew[,3], y = Nnew[,2], init1 = 1, init2 = NULL)
+print("The optimized parameter1 for bin.mean is:")
+out1$lambda1
+```
+<br>
+<br>
+<br>
+<br>
+
+#### b) Find optimized parameter(s) for gauss.mean
+```{r}
+out2 <- Greedy.rs(func.name = "gauss.mean", incre1 = 0.001, incre2 = NULL, x = Nnew[,3], y = Nnew[,2], init1 = 0.005, init2 = NULL)
+print("The optimized parameter1 for gauss.mean is:")
+out2$lambda1
+```
+
+
+
+
+<br>
+<br>
+<br>
+<br>
+
+#### c) Find optimized parameter(s) for gauss.reg
+```{r}
+out3 <- Greedy.rs(func.name = "gauss.reg", incre1 = 0.001, incre2 = NULL, x = Nnew[,3], y = Nnew[,2], init1 = 0.005, init2 = NULL)
+print("The optimized parameter1 for gauss.mean is:")
+out3$lambda1
+```
+
+
+
+
+
+
+
+
+<br>
+<br>
+<br>
+<br>
+
+
+#### d) Find optimized parameter(s) for gauss.mean.trunc
+```{r}
+out3 <- Greedy.rs(func.name = "gauss.mean.trunc", incre1 = 0.001, incre2 = 1, x = Nnew[,3], y = Nnew[,2], init1 = 0.005, init2 = 5)
+print("The optimized parameter1 for gauss.mean.trunc is:")
+out3$lambda1
+print("The optimized parameter2 for gauss.mean.trunc is:")
+out3$lambda2
+```
+
+
+<br>
+<br>
+<br>
+<br>
+
+
+#### e) Find optimized parameter(s) for gauss.reg.trunc
+```{r}
+out3 <- Greedy.rs(func.name = "gauss.reg.trunc", incre1 = 0.001, incre2 = 1, x = Nnew[,3], y = Nnew[,2], init1 = 0.005, init2 = 5)
+print("The optimized parameter1 for gauss.reg.trunc is:")
+out3$lambda1
+print("The optimized parameter2 for gauss.reg.trunc is:")
+out3$lambda2
+```
+<br>
+<br>
+<br>
+<br>
+
+
+
+

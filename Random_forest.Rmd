@@ -1,0 +1,164 @@
+
+---
+title: "Random Forest"
+date: "Thursday, 11/22"
+author: "[Chenjia Li]"
+output: html_notebook
+---
+
+## Clear Environment
+
+```{r}
+rm(list = ls())
+```
+
+
+## Import packages
+```{r}
+library(randomForest)
+library(rpart)
+library(tree)
+library(pROC)
+library(mgcv)
+library(ISLR)
+library(dplyr)
+library(tidyverse)
+```
+
+<br>
+<br>
+
+## 1.Wage In ISLR has binary variables (Health and Health_ins) choose 1.
+```{r}
+data(Wage)
+head(Wage)
+Wage <- as_tibble(Wage)
+```
+
+
+```{r}
+data1 <- Wage %>%
+  mutate(health_ins = abs(as.numeric(health_ins) - 2), maritl = as.numeric(maritl), race = as.numeric(race), education = as.numeric(education), region = as.numeric(region), jobclass = as.numeric(jobclass), health = as.numeric(health), logwage = as.numeric(logwage))
+data1
+```
+<br>
+<br>
+
+
+
+## 2.Create a test and train data set for whichever variable you choose
+```{r}
+n1 <- length(data1[[1]])
+v1 <- sample(n1,floor(3*n1/4),replace=F)
+data.train <- data1[v1,]
+data.test <- data1[-v1,]
+data.train
+data.test
+```
+<br>
+<br>
+
+
+
+
+## 3.Create a logit model using glm and Gam
+
+```{r}
+logit_model <- glm(health_ins ~ year + age + maritl + race + education + region + jobclass + health + logwage + wage, data = data1,family = binomial(link = "logit"))
+summary(logit_model)
+pred <- logit_model$fitted
+
+Gam_model <- gam(health_ins ~ s(age, bs = "cr") + s(logwage, bs = "cr") + s(wage, bs = "cr"), data = data1, family = binomial(link = "logit")) #s or l, smooth and loess
+summary(Gam_model)
+pred2 <- Gam_model$fitted
+```
+
+
+
+<br>
+<br>
+
+
+## 4.Also try tree, rpart and random forest and 5.Predict the test data set
+#### a) Use Train and Test data set to apply tree, repart, and randomforest. Then predict the test data set.
+```{r}
+dum0tree<-tree(health_ins ~ year + age + maritl + race + education + region + jobclass + health + logwage + wage,data=data.train)
+dum0rpart<-rpart(health_ins ~ year + age + maritl + race + education + region + jobclass + health + logwage + wage,data=data.train)
+dum0forest<-randomForest(health_ins ~ year + age + maritl + race + education + region + jobclass + health + logwage + wage,data=data.train)
+hi2tree<-predict(dum0tree,newdata=data.test)
+hi2rpart<-predict(dum0rpart,newdata=data.test)
+hi2forest<-predict(dum0forest,newdata=data.test)
+```
+
+
+#### b) plot the result
+```{r}
+par(mfrow=c(2,2))
+plot(hi2tree,data.test$health_ins)
+plot(hi2rpart,data.test$health_ins)
+plot(hi2forest,data.test$health_ins)
+
+par(mfrow=c(1,1)) 
+plot(dum0tree)
+text(dum0tree)
+title("Tree")
+
+par(mfrow=c(1,1)) 
+plot(dum0rpart)
+text(dum0rpart)
+title("rpart")
+
+par(mfrow=c(1,1)) 
+plot(dum0forest)
+```
+
+
+<br>
+<br>
+
+
+
+
+
+## 6.Plot Roc for all of the methods on the same plot (different colors)
+```{r}
+roc(data.test$health_ins, hi2tree)
+roc(data.test$health_ins, hi2rpart)
+roc(data.test$health_ins, hi2forest)
+roc(data1$health_ins, pred)
+roc(data1$health_ins, pred2)
+#a) Plot tree
+plot.roc(data.test$health_ins, hi2tree, col = 1)
+#b) Plot rpart
+lines.roc(data.test$health_ins, hi2rpart, col = 2)
+#c) Plot forest
+lines.roc(data.test$health_ins, hi2forest, col = 3)
+#d) Plot Logitstic Model
+lines.roc(data1$health_ins, pred, col = 4)
+#d) Plot Gam Model
+lines.roc(data1$health_ins, pred2, col = 5)
+```
+
+
+
+<br>
+<br>
+
+
+
+## 7.Which appears to do better, are there some regions of specificity where methods trade off?
+```{r}
+#a) The glm method appears to do better, because the under curve area is the largest one among all the methods.
+#b) Based on the Plot,s we can get that between specificity 0.75 to 1, tree and rpart roughly have the worst sensitivity. In the other regions, they perform roughly same.
+```
+<br>
+<br>
+<br>
+<br>
+
+
+
+
+
+
+
