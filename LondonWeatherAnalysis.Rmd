@@ -1,0 +1,609 @@
+---
+title: "London Weather Analysis"
+date: "Thursday, 12/15"
+author: "[Chenjia Li]"
+output: html_notebook
+---
+
+```{r}
+## Import packages
+#rm(list = ls())
+
+#packages
+library(imputeTS)
+library(zoo)
+library(forecast)
+library(bayesrules)
+library(randomForest)
+library(rpart)
+library(tree)
+library(pROC)
+library(mgcv)
+library(ISLR)
+library(lars)
+library(dplyr)
+library(tidyverse)
+library(faraway)
+library(olsrr)
+library(caret)
+library(astsa)
+library(glmnet)
+library(leaps)
+```
+
+
+## Curvature data maker
+```{r}
+#curvature maker
+matrix.2ndorder.make<-function(x, only.quad=F){
+  x0<-x
+  dimn<-dimnames(x)[[2]] #extract the names of the variables
+  num.col<-length(x[1,]) # how many columns
+  for(i in 1:num.col){
+    # if we are doing all 2nd order
+    if(!only.quad){
+      for(j in i:num.col){
+        x0<-cbind(x0,x[,i]*x[,j])
+        dimn<-c(dimn,paste(dimn[i],dimn[j],sep=""))
+        #create interaction dimnames
+      }
+    } else {
+      #in here only if doing only squared terms
+      x0<-cbind(x0,x[,i]*x[,i])
+      dimn<-c(dimn,paste(dimn[i],"2",sep="")) # squared dimmension names
+    }
+  }
+  dimnames(x0)[[2]]<-dimn
+  x0
+}
+```
+
+
+## Autoregression prediction function
+```{r}
+# ar predicted function
+my.ar.predict <- function(arstr,newdat,lag,lag1){
+  n1<-length(newdat)
+  pred<-NULL
+  for(i in 0:(n1-lag-1)){
+    v1<-c(1:(lag+i))
+    pred<-c(pred,predict(arstr,newdat[v1],n.ahead=lag1)$pred[lag1])
+  }
+  plot(pred,newdat[-c(1:lag)], xlab = "Predicted Value", ylab = "Data Value")
+  cor(pred,newdat[-c(1:lag)])
+  pred
+}
+```
+
+
+## Deviation calculation function
+```{r}
+# deviation computation function, both monthly and seasonally
+comp.deviation <- function(data.vec){
+  
+  return(data.vec - mean(data.vec))
+  
+}
+```
+
+
+
+
+
+
+## 1. Dataset weather-anomalies-1964-2013
+```{r}
+
+weatherData <- read.csv("london_weather.csv")
+
+head(weatherData)
+
+```
+
+
+#### a) Data Wrangling
+
+```{r}
+#https://cran.r-project.org/web/packages/imputeTS/imputeTS.pdf
+# Checking each predictor, whether they have NA value
+# Conclusion: We have to apply spline on the dataset except date and sunshine
+head(weatherData[is.na(weatherData$cloud_cover),])
+head(weatherData[is.na(weatherData$sunshine),])
+head(weatherData[is.na(weatherData$global_radiation),])
+head(weatherData[is.na(weatherData$mean_temp),])
+head(weatherData[is.na(weatherData$precipitation),])
+head(weatherData[is.na(weatherData$pressure),])
+head(weatherData[is.na(weatherData$snow_depth),])
+
+
+# remedy
+approxValues1 <- as.matrix(na_kalman(ts(weatherData$cloud_cover, weatherData$date)))[,1]
+approxValues2 <- as.matrix(na_kalman(ts(weatherData$global_radiation, weatherData$date)))[,1]
+approxValues3 <- as.matrix(na_kalman(ts(weatherData$mean_temp, weatherData$date)))[,1]
+approxValues4 <- as.matrix(na_kalman(ts(weatherData$precipitation, weatherData$date)))[,1]
+approxValues5 <- as.matrix(na_kalman(ts(weatherData$pressure, weatherData$date)))[,1]
+approxValues6 <- as.matrix(na_kalman(ts(weatherData$snow_depth, weatherData$date)))[,1]
+
+
+
+weatherData <- weatherData %>%
+  select(-max_temp,-min_temp) %>%
+  mutate(cloud_cover = round(approxValues1,1), 
+         global_radiation = approxValues2,
+         mean_temp = approxValues3,
+         precipitation = approxValues4,
+         pressure = approxValues5,
+         snow_depth = approxValues6)
+```
+
+
+```{r}
+#Right now, we have no NA entry in our dataset.
+weatherData
+
+
+head(weatherData[is.na(weatherData$cloud_cover),])
+head(weatherData[is.na(weatherData$sunshine),])
+head(weatherData[is.na(weatherData$global_radiation),])
+head(weatherData[is.na(weatherData$mean_temp),])
+head(weatherData[is.na(weatherData$precipitation),])
+head(weatherData[is.na(weatherData$pressure),])
+head(weatherData[is.na(weatherData$snow_depth),])
+
+
+weatherData[weatherData$date %in% c(20050912, 20050515, 20051230, 20060109, 20060203, 20060317),]
+
+```
+
+
+#### Monthly deviation
+
+```{r}
+yr <- c(1979:2020)
+month <- c("01","02","03","04","05","06","07","08","09","10","11","12")
+
+tempData <- weatherData %>%
+  select(date,mean_temp)
+
+Deviation_wd <- NULL
+
+date.char <- substring(as.character(tempData$date),1,6)
+
+
+for ( i in yr ){
+  for ( j in month ){
+    tData <- round(comp.deviation(tempData$mean_temp[grepl(gsub(" ", "", paste(as.character(i),j)), date.char)]),2)
+    Deviation_wd <- c(Deviation_wd,tData)
+  }
+}
+
+MonthData <- weatherData %>%
+  mutate(mean_temp = Deviation_wd) %>%
+  rename(Month_Dev = mean_temp)
+
+MonthData
+
+```
+
+
+
+#### Seasonally deviation
+
+```{r}
+yr <- c(1979:2019)
+
+tempData2 <- weatherData %>%
+  select(date,mean_temp)
+
+season_DevData <- NULL
+
+t1Data <- round(comp.deviation(tempData$mean_temp[date.char == "197901"]),2)
+season_DevData <- c(season_DevData,t1Data)
+
+for ( i in yr ){
+  season_DevData <- c(season_DevData,round(comp.deviation(c(tempData$mean_temp[grepl(gsub(" ", "", paste(as.character(i),"02")), date.char)],tempData$mean_temp[grepl(gsub(" ", "", paste(as.character(i),"03")), date.char)],tempData$mean_temp[grepl(gsub(" ", "", paste(as.character(i),"04")), date.char)])),2))
+  
+  season_DevData <- c(season_DevData,round(comp.deviation(c(tempData$mean_temp[grepl(gsub(" ", "", paste(as.character(i),"05")), date.char)],tempData$mean_temp[grepl(gsub(" ", "", paste(as.character(i),"06")), date.char)],tempData$mean_temp[grepl(gsub(" ", "", paste(as.character(i),"07")), date.char)])),2))
+  
+  season_DevData <- c(season_DevData,round(comp.deviation(c(tempData$mean_temp[grepl(gsub(" ", "", paste(as.character(i),"08")), date.char)],tempData$mean_temp[grepl(gsub(" ", "", paste(as.character(i),"09")), date.char)],tempData$mean_temp[grepl(gsub(" ", "", paste(as.character(i),"10")), date.char)])),2))
+  
+  season_DevData <- c(season_DevData,round(comp.deviation(c(tempData$mean_temp[grepl(gsub(" ", "", paste(as.character(i),"11")), date.char)],tempData$mean_temp[grepl(gsub(" ", "", paste(as.character(i),"12")), date.char)],tempData$mean_temp[grepl(gsub(" ", "", paste(as.character(i+1),"01")), date.char)])),2))
+}
+
+season_DevData <- c(season_DevData,round(comp.deviation(c(tempData$mean_temp[grepl(gsub(" ", "", paste(as.character(2020),"02")), date.char)],tempData$mean_temp[grepl(gsub(" ", "", paste(as.character(2020),"03")), date.char)],tempData$mean_temp[grepl(gsub(" ", "", paste(as.character(2020),"04")), date.char)])),2))
+  
+season_DevData <- c(season_DevData,round(comp.deviation(c(tempData$mean_temp[grepl(gsub(" ", "", paste(as.character(2020),"05")), date.char)],tempData$mean_temp[grepl(gsub(" ", "", paste(as.character(2020),"06")), date.char)],tempData$mean_temp[grepl(gsub(" ", "", paste(as.character(2020),"07")), date.char)])),2))
+  
+season_DevData <- c(season_DevData,round(comp.deviation(c(tempData$mean_temp[grepl(gsub(" ", "", paste(as.character(2020),"08")), date.char)],tempData$mean_temp[grepl(gsub(" ", "", paste(as.character(2020),"09")), date.char)],tempData$mean_temp[grepl(gsub(" ", "", paste(as.character(2020),"10")), date.char)])),2))
+  
+season_DevData <- c(season_DevData,round(comp.deviation(c(tempData$mean_temp[grepl(gsub(" ", "", paste(as.character(2020),"11")), date.char)],tempData$mean_temp[grepl(gsub(" ", "", paste(as.character(2020),"12")), date.char)])),2))
+  
+
+SeasonData <- weatherData %>%
+  mutate(mean_temp = season_DevData) %>%
+  rename(Season_Dev = mean_temp)
+
+SeasonData
+```
+
+
+
+
+## 2. Time series on 1)original Dataset 2)Monthly temperature Deviation 3)Seasonal temperature Deviation
+
+
+#### 1) Monthly Dataset
+
+```{r}
+
+#Transform data frame to time series class
+ts.o <- ts(weatherData$mean_temp, start = 1, end = nrow(weatherData), frequency = 1)
+#Visualize ts
+plot(ts.o)
+#Length of data
+dlen<- length(ts.o)
+#length of model data
+lm.o <- length(ts.o) - 3500
+#Build model autoregression
+ar.o <- ar(ts.o[1:lm.o])
+#lag selected by autoregrssion model
+lag.o<- ar.o$order
+
+
+dataVal <- weatherData$mean_temp[-c(1:lm.o)]
+dataVal <- dataVal[-c(1:lag.o)]
+
+#predicton based on different lag
+pred1.o <- my.ar.predict(ar.o,ts.o[-c(1:lm.o)],lag.o,1)
+pred2.o <- my.ar.predict(ar.o,ts.o[-c(1:lm.o)],lag.o,2)
+pred3.o <- my.ar.predict(ar.o,ts.o[-c(1:lm.o)],lag.o,3)
+pred4.o <- my.ar.predict(ar.o,ts.o[-c(1:lm.o)],lag.o,4)
+pred5.o <- my.ar.predict(ar.o,ts.o[-c(1:lm.o)],lag.o,5)
+pred6.o <- my.ar.predict(ar.o,ts.o[-c(1:lm.o)],lag.o,6)
+pred7.o <- my.ar.predict(ar.o,ts.o[-c(1:lm.o)],lag.o,7)
+
+
+
+mae1.o <- median(abs(pred1.o-dataVal))
+mae2.o <- median(abs(pred2.o-dataVal))
+mae3.o <- median(abs(pred3.o-dataVal))
+mae4.o <- median(abs(pred4.o-dataVal))
+mae5.o <- median(abs(pred5.o-dataVal))
+mae6.o <- median(abs(pred6.o-dataVal))
+mae7.o <- median(abs(pred7.o-dataVal))
+mae1.o
+mae2.o
+mae3.o
+mae4.o
+mae5.o
+mae6.o
+mae7.o
+
+plot(c(1:7), c(mae1.o,mae2.o,mae3.o,mae4.o,mae5.o,mae6.o,mae7.o), xlab = "lag", ylab = "MAE")
+
+```
+
+
+
+#### 2) Monthly Dataset
+
+```{r}
+
+#Transform data frame to time series class
+ts.m <- ts(MonthData$Month_Dev, start = 1, end = nrow(MonthData), frequency = 1)
+#Visualize ts
+plot(ts.m)
+#Length of data
+dlen.m<- length(ts.m)
+#length of model data
+lm.m <- length(ts.m) - 3500
+#Build model autoregression
+ar.m <- ar(ts.m[1:lm.m])
+#lag selected by autoregrssion model
+lag.m<- ar.m$order
+
+
+dataVal.m <- MonthData$Month_Dev[-c(1:lm.m)]
+dataVal.m <- dataVal.m[-c(1:lag.m)]
+
+#predicton based on different lag
+pred1.m <- my.ar.predict(ar.m,ts.m[-c(1:lm.m)],lag.m,1)
+pred2.m <- my.ar.predict(ar.m,ts.m[-c(1:lm.m)],lag.m,2)
+pred3.m <- my.ar.predict(ar.m,ts.m[-c(1:lm.m)],lag.m,3)
+pred4.m <- my.ar.predict(ar.m,ts.m[-c(1:lm.m)],lag.m,4)
+pred5.m <- my.ar.predict(ar.m,ts.m[-c(1:lm.m)],lag.m,5)
+pred6.m <- my.ar.predict(ar.m,ts.m[-c(1:lm.m)],lag.m,6)
+pred7.m <- my.ar.predict(ar.m,ts.m[-c(1:lm.m)],lag.m,7)
+
+
+
+mae1.m <- median(abs(pred1.m-dataVal.m))
+mae2.m <- median(abs(pred2.m-dataVal.m))
+mae3.m <- median(abs(pred3.m-dataVal.m))
+mae4.m <- median(abs(pred4.m-dataVal.m))
+mae5.m <- median(abs(pred5.m-dataVal.m))
+mae6.m <- median(abs(pred6.m-dataVal.m))
+mae7.m <- median(abs(pred7.m-dataVal.m))
+mae1.m
+mae2.m
+mae3.m
+mae4.m
+mae5.m
+mae6.m
+mae7.m
+
+plot(c(1:7), c(mae1.m,mae2.m,mae3.m,mae4.m,mae5.m,mae6.m,mae7.m), xlab = "lag", ylab = "MAE")
+
+
+```
+
+
+
+
+
+
+
+#### 3) Seasonal Dataset
+
+```{r}
+
+#Transform data frame to time series class
+ts.s <- ts(SeasonData$Season_Dev, start = 1, end = nrow(SeasonData), frequency = 1)
+#Visualize ts
+plot(ts.s)
+#Length of data
+dlen.s<- length(ts.s)
+#length of model data
+lm.s <- length(ts.s) - 3500
+#Build model autoregression
+ar.s <- ar(ts.s[1:lm.s])
+#lag selected by autoregrssion model
+lag.s<- ar.s$order
+
+
+dataVal.s <- SeasonData$Season_Dev[-c(1:lm.s)]
+dataVal.s <- dataVal.s[-c(1:lag.s)]
+
+#prediction based on different lag
+pred1.s <- my.ar.predict(ar.s,ts.s[-c(1:lm.s)],lag.s,1)
+pred2.s <- my.ar.predict(ar.s,ts.s[-c(1:lm.s)],lag.s,2)
+pred3.s <- my.ar.predict(ar.s,ts.s[-c(1:lm.s)],lag.s,3)
+pred4.s <- my.ar.predict(ar.s,ts.s[-c(1:lm.s)],lag.s,4)
+pred5.s <- my.ar.predict(ar.s,ts.s[-c(1:lm.s)],lag.s,5)
+pred6.s <- my.ar.predict(ar.s,ts.s[-c(1:lm.s)],lag.s,6)
+pred7.s <- my.ar.predict(ar.s,ts.s[-c(1:lm.s)],lag.s,7)
+
+
+
+mae1.s <- median(abs(pred1.s-dataVal.s))
+mae2.s <- median(abs(pred2.s-dataVal.s))
+mae3.s <- median(abs(pred3.s-dataVal.s))
+mae4.s <- median(abs(pred4.s-dataVal.s))
+mae5.s <- median(abs(pred5.s-dataVal.s))
+mae6.s <- median(abs(pred6.s-dataVal.s))
+mae7.s <- median(abs(pred7.s-dataVal.s))
+mae1.s
+mae2.s
+mae3.s
+mae4.s
+mae5.s
+mae6.s
+mae7.s
+
+plot(c(1:7), c(mae1.s,mae2.s,mae3.s,mae4.s,mae5.s,mae6.s,mae7.s), xlab = "lag", ylab = "MAE")
+
+
+```
+
+# Overall Deviation
+```{r}
+
+#Transform data frame to time series class
+dev4 <- comp.deviation(weatherData$mean_temp)
+data_overall <- weatherData %>%
+  mutate(dev_overall = dev4) %>%
+  select(-mean_temp)
+
+#sample lag (= 1)
+temp_lag <- data_overall$dev_overall
+temp_lag <- c(temp_lag, NA)
+temp_lag <- temp_lag[-1]
+
+ts.4 <- ts(dev4, start = 1, end = nrow(weatherData), frequency = 1)
+#Visualize ts
+plot(ts.4)
+#Length of data
+dlen.4<- length(ts.4)
+#length of model data
+lm.4 <- length(ts.4) - 3500
+#Build model autoregression
+ar.4 <- ar(ts.4[1:lm.4])
+#lag selected by autoregrssion model
+lag.4<- ar.4$order
+
+
+dataVal.4 <- dev4[-c(1:lm.4)]
+dataVal.4 <- dev4[-c(1:lag.4)]
+
+#prediction based on different lag
+pred1.4 <- my.ar.predict(ar.4,ts.4[-c(1:lm.4)],lag.4,1)
+pred2.4 <- my.ar.predict(ar.4,ts.4[-c(1:lm.4)],lag.4,2)
+pred3.4 <- my.ar.predict(ar.4,ts.4[-c(1:lm.4)],lag.4,3)
+pred4.4 <- my.ar.predict(ar.4,ts.4[-c(1:lm.4)],lag.4,4)
+pred5.4 <- my.ar.predict(ar.4,ts.4[-c(1:lm.4)],lag.4,5)
+pred6.4 <- my.ar.predict(ar.4,ts.4[-c(1:lm.4)],lag.4,6)
+pred7.4 <- my.ar.predict(ar.4,ts.4[-c(1:lm.4)],lag.4,7)
+
+mae1.4 <- median(abs(pred1.4-dataVal.4))
+mae2.4 <- median(abs(pred2.4-dataVal.4))
+mae3.4 <- median(abs(pred3.4-dataVal.4))
+mae4.4 <- median(abs(pred4.4-dataVal.4))
+mae5.4 <- median(abs(pred5.4-dataVal.4))
+mae6.4 <- median(abs(pred6.4-dataVal.4))
+mae7.4 <- median(abs(pred7.4-dataVal.4))
+mae1.4
+mae2.4
+mae3.4
+mae4.4
+mae5.4
+mae6.4
+mae7.4
+
+plot(c(1:7), c(mae1.4,mae2.4,mae3.4,mae4.4,mae5.4,mae6.4,mae7.4), xlab = "lag", ylab = "MAE")
+
+```
+
+```{r}
+data_overall
+```
+
+
+
+## 3. Arima Model Forecasting
+
+ARIMA (AutoRegressive Integrated Moving Average) and AR (AutoRegressive) are both time series forecasting methods. The main difference between the two is that ARIMA includes the additional concept of integration, which accounts for the fact that the time series may be non-stationary. In other words, ARIMA can be used to model time series that have a trend or seasonal component, while AR can only be used for stationary time series.In this reason, we would like to see whether Arima works better than AR.
+
+```{r}
+arima.len <- lm.m+lag.m
+arima.m <- auto.arima(ts.m[1:arima.len])
+
+predict(arima.m,newdata=ts.m[-c(1:arima.len)])
+
+pred_arima.m <- forecast(arima.m,3460)$mean
+pred_arima.m <- as.matrix(pred_arima.m)[,1]
+median(abs(dataVal.m - pred_arima.m))
+
+
+arima.len1 <- lm.s+lag.s
+arima.s <- auto.arima(ts.s[1:arima.len1])
+
+predict(arima.s,newdata=ts.s[-c(1:arima.len1)])
+
+pred_arima.s <- forecast(arima.s,3494)$mean
+pred_arima.s <- as.matrix(pred_arima.s)[,1]
+median(abs(dataVal.s - pred_arima.s))
+```
+
+
+
+## 4. Model Selection and Regression Model
+
+#### a) Scatter Plot
+The scatter Plot shows that we have to deal with the multicollinearity and overfitting problem by Larsso
+```{r}
+pairs(weatherData)
+```
+
+#b) We shift the temperature to the day before, which means we used today's predictors to predict tomorrow mean temperature
+```{r}
+newTemp <- weatherData$mean_temp
+newTemp <- c(newTemp, NA)
+newTemp <- newTemp[-1]
+newData <- weatherData %>%
+  select(-date) %>%
+  mutate(mean_temp = newTemp)
+newData <- newData[-nrow(newData),]
+nrow(newData)
+newData
+```
+
+
+#c) Split the original dataset into trainSet and Test set
+```{r}
+new.len <- nrow(newData) - 3500
+matData <- newData
+trainData <- matData[c(1:new.len),]
+testData <- matData[-c(1:new.len),]
+```
+
+```{r}
+lmod <- lm(mean_temp ~. ,data = trainData)
+summary(lmod)
+```
+
+It is possible for a linear regression model to have all significant regressors but still not be the best model for a given data set. This can happen if the model is overfitted to the training data, meaning that it has a high degree of flexibility and can fit the training data very well, but does not generalize well to new data.
+
+So we would like to implement model selection and other criteria to find the best model for prediction.
+
+
+
+
+## d) Use train set for model building (2nd order data and 2nd order with interaction term data). Plot the larsso plot and the plot of degree of freedom against Cp. We need to choose the best Cp from the output.
+
+```{r}
+y.train <- as.matrix(trainData[,4])
+x.train <- as.matrix(trainData[,-4])
+
+#Only second order 
+weather.mat2nd.t <- matrix.2ndorder.make(x.train, only.quad=T)
+dum.lars.t <- lars(weather.mat2nd.t,y.train)
+plot(dum.lars.t)
+dum.t <- dum.lars.t
+plot(dum.t$df,dum.t$Cp,log="y")
+lines(dum.t$df,dum.t$df)
+
+
+#include interaction term
+weather.mat2nd.f <- matrix.2ndorder.make(x.train,only.quad=F)
+dum.lars.f <- lars(weather.mat2nd.f, y.train)
+plot(dum.lars.f)
+dum.f<-dum.lars.f
+plot(dum.f$df,dum.f$Cp,log="y")
+lines(dum.f$df,dum.f$df)
+```
+
+
+
+#### e)Find the best Cp
+```{r}
+#From the above graph
+#for 2nd
+I1 <- dum.t$df==12
+dum.t$Cp[I1]
+
+I1<-dum.t$df==13
+dum.t$Cp[I1]
+
+
+#for interaction
+#test df > 25
+I1<-dum.f$df==25
+dum.f$Cp[I1]
+
+I1 <- dum.f$df==26
+dum.f$Cp[I1]
+
+I1<-dum.f$df==27
+dum.f$Cp[I1]
+
+I1<-dum.f$df==28
+dum.f$Cp[I1]
+
+#Chose Cp = 59
+coef(dum.f)[59,]
+```
+
+
+
+## f)Use the best Cp to predict the response value of test set and find its Median Absolute value
+```{r}
+y.test <- as.matrix(testData[,4])
+x.test <- as.matrix(testData[,-4])
+Snd.test <- matrix.2ndorder.make(x.test,only.quad=T)
+diff <- mean(y.test[,1]) - mean(Snd.test%*%coef(dum.t)[14,])
+mae <- median(abs(y.test[,1] - Snd.test%*%coef(dum.t)[14,] - diff))
+mae
+
+
+Snd.test <- matrix.2ndorder.make(x.test,only.quad=F)
+diff <- mean(y.test[,1]) - mean(Snd.test%*%coef(dum.f)[59,])
+mae <- median(abs(y.test[,1] - Snd.test%*%coef(dum.f)[59,] - diff))
+mae
+```
+
+
+
+
+
+
+
